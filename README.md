@@ -1,5 +1,5 @@
 # NSDanmaku
-一个简单的UWP弹幕控件
+一个简单的UWP/WinUI3弹幕控件
 
 ## 截图
 ![pic0.png](https://i.loli.net/2021/02/22/taBKgwvI3RymJ8V.png)
@@ -7,12 +7,15 @@
 ## 快速入门
 
 1、添加nuget引用
-`Install-Package NSDanmaku`
+
+UWP： `Install-Package NSDanmaku`
+WinUI3： `Install-Package NSDanmaku.WinUI`
 
 2、XAML
 ```
  ...
- xmlns:controls="using:NSDanmaku.Controls"
+ xmlns:controls="using:NSDanmaku.Controls" // UWP
+ xmlns:controls="using:NSDanmaku.WinUI.Controls" // WinUI3
  ...
  <Grid Background="Gray">
     <controls:Danmaku x:Name="danmaku"></controls:Danmaku>
