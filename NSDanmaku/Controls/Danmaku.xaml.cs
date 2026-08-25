@@ -51,8 +51,8 @@ namespace NSDanmaku.Controls
         {
             this.InitializeComponent();
             DanmakuArea = 1.0;
-            DanmakuBold = false;
-            DanmakuFontFamily = "";
+            DanmakuBold = true;
+            DanmakuFontFamily = "黑体";
         }
         #region 弹幕属性
         /// <summary>
@@ -124,7 +124,7 @@ namespace NSDanmaku.Controls
         }
 
         public static readonly DependencyProperty DanmakuDurationProperty =
-            DependencyProperty.Register("DanmakuDuration", typeof(int), typeof(Danmaku), new PropertyMetadata(10, OnDanmakuDurationChanged));
+            DependencyProperty.Register("DanmakuDuration", typeof(int), typeof(Danmaku), new PropertyMetadata(5, OnDanmakuDurationChanged));
         private static void OnDanmakuDurationChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             var value = Convert.ToInt32(e.NewValue);
@@ -150,7 +150,7 @@ namespace NSDanmaku.Controls
         }
 
         public static readonly DependencyProperty DanmakuBoldProperty =
-            DependencyProperty.Register("DanmakuBold", typeof(bool), typeof(Danmaku), new PropertyMetadata(0));
+            DependencyProperty.Register("DanmakuBold", typeof(bool), typeof(Danmaku), new PropertyMetadata(true));
 
 
         /// <summary>
@@ -164,7 +164,7 @@ namespace NSDanmaku.Controls
 
      
         public static readonly DependencyProperty DanmakuFontFamilyProperty =
-            DependencyProperty.Register("DanmakuFontFamily", typeof(string), typeof(Danmaku), new PropertyMetadata(0));
+            DependencyProperty.Register("DanmakuFontFamily", typeof(string), typeof(Danmaku), new PropertyMetadata("黑体"));
 
 
         /// <summary>
@@ -215,9 +215,93 @@ namespace NSDanmaku.Controls
         List<Storyboard> topBottomStoryList = new List<Storyboard>();
         List<Storyboard> rollStoryList = new List<Storyboard>();
         List<Storyboard> positionStoryList = new List<Storyboard>();
+        private const double FixedDanmakuDuration = 3.5;
+        private const double OfficialDanmakuWidth = 543.0;
+        private const double MinimumScrollDuration = 0.1;
+        private const double PoolGap = 1.0;
+        private sealed class DanmakuSpaceItem
+        {
+            public Grid Element { get; set; }
+            public double Width { get; set; }
+            public double Height { get; set; }
+            public double LogicalY { get; set; }
+            public double StartTime { get; set; }
+            public List<DanmakuSpaceItem> Pool { get; set; }
+        }
+
+        private readonly List<List<DanmakuSpaceItem>> topPools = new List<List<DanmakuSpaceItem>>();
+        private readonly List<List<DanmakuSpaceItem>> bottomPools = new List<List<DanmakuSpaceItem>>();
+        private readonly List<List<DanmakuSpaceItem>> scrollPools = new List<List<DanmakuSpaceItem>>();
+        private readonly List<List<DanmakuSpaceItem>> reverseScrollPools = new List<List<DanmakuSpaceItem>>();
+        private readonly Dictionary<Grid, DanmakuSpaceItem> spaceItems = new Dictionary<Grid, DanmakuSpaceItem>();
         Dictionary<Grid, double> measuredRowHeights = new Dictionary<Grid, double>();
         double defaultRowHeight;
         double layoutHeight;
+
+        private double GetScrollViewportWidth()
+        {
+            var width = gv.ActualWidth;
+            if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+            {
+                width = grid_Scroll.ActualWidth;
+            }
+
+            if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+            {
+                width = ActualWidth;
+            }
+
+            return double.IsNaN(width) || double.IsInfinity(width) || width <= 0
+                ? OfficialDanmakuWidth
+                : width;
+        }
+
+        private double GetDanmakuWidth(Grid item)
+        {
+            if (item == null)
+            {
+                return 0;
+            }
+
+            var width = item.ActualWidth;
+            if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+            {
+                item.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                width = item.DesiredSize.Width;
+            }
+
+            return double.IsNaN(width) || double.IsInfinity(width) || width <= 0
+                ? 0
+                : width;
+        }
+
+        private double GetScrollReferenceDuration()
+        {
+            return Math.Max(MinimumScrollDuration, DanmakuDuration);
+        }
+
+        //Official player speed: speede * 0.5 * (543 + itemWidth) / 3.
+        private double GetScrollSpeed(double itemWidth)
+        {
+            itemWidth = Math.Max(0, itemWidth);
+            return (OfficialDanmakuWidth + itemWidth) / GetScrollReferenceDuration();
+        }
+
+        private double GetScrollDuration(double viewportWidth, double itemWidth)
+        {
+            if (double.IsNaN(viewportWidth) || double.IsInfinity(viewportWidth) || viewportWidth <= 0)
+            {
+                viewportWidth = OfficialDanmakuWidth;
+            }
+
+            itemWidth = Math.Max(0, itemWidth);
+            return (viewportWidth + itemWidth) / GetScrollSpeed(itemWidth);
+        }
+
+        private double GetDanmakuClock()
+        {
+            return (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
+        }
 
         protected override Size MeasureOverride(Size availableSize)
         {
@@ -306,7 +390,7 @@ namespace NSDanmaku.Controls
                     continue;
                 }
 
-                measuredRowHeights[grid] = container == grid_Scroll ? GetDefaultRowHeight() : MeasureDanmakuHeight(grid);
+                measuredRowHeights[grid] = MeasureDanmakuHeight(grid);
             }
 
             for (int row = 0; row < container.RowDefinitions.Count; row++)
@@ -322,19 +406,16 @@ namespace NSDanmaku.Controls
                 return;
             }
 
-            var rowHeight = container == grid_Scroll ? GetDefaultRowHeight() : 0.0;
-            if (container != grid_Scroll)
+            var rowHeight = 0.0;
+            foreach (var item in container.Children)
             {
-                foreach (var item in container.Children)
+                var grid = item as Grid;
+                double measuredHeight;
+                if (grid != null
+                    && Grid.GetRow(grid) == row
+                    && measuredRowHeights.TryGetValue(grid, out measuredHeight))
                 {
-                    var grid = item as Grid;
-                    double measuredHeight;
-                    if (grid != null
-                        && Grid.GetRow(grid) == row
-                        && measuredRowHeights.TryGetValue(grid, out measuredHeight))
-                    {
-                        rowHeight = Math.Max(rowHeight, measuredHeight);
-                    }
+                    rowHeight = Math.Max(rowHeight, measuredHeight);
                 }
             }
 
@@ -391,7 +472,7 @@ namespace NSDanmaku.Controls
 
         private void EnsureRowsForItem(Grid container, Grid item)
         {
-            measuredRowHeights[item] = container == grid_Scroll ? GetDefaultRowHeight() : MeasureDanmakuHeight(item);
+            measuredRowHeights[item] = MeasureDanmakuHeight(item);
             SetRows(container, GetLayoutHeight());
         }
 
@@ -452,63 +533,28 @@ namespace NSDanmaku.Controls
                 }
             }
         }
-        private int GetTopAvailableRow()
+        private double GetFixedAvailableHeight(Grid container)
         {
-          
-            var max = grid_Top.RowDefinitions.Count/2;
-           
-            for (int i = 0; i < max; i++)
+            var height = container.ActualHeight;
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
             {
-                
-                var row = grid_Top.Children.FirstOrDefault(x=>Grid.GetRow((x as Grid)) == i);
-                if (row!=null)
-                {
-                    continue;
-                }
-                else
-                {
-                    return i;
-                }
-                
+                height = GetLayoutHeight();
             }
-            return -1;
-        }
-        private int GetBottomAvailableRow()
-        {
 
-            var max = grid_Bottom.RowDefinitions.Count/2;
-            for (int i = 1; i <= max; i++)
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
             {
-                var rowNum = grid_Bottom.RowDefinitions.Count - i;
-                var row = grid_Bottom.Children.FirstOrDefault(x => Grid.GetRow((x as Grid)) == rowNum);
-                if (row != null)
-                {
-                    continue;
-                }
-                else
-                {
-                    return rowNum;
-                }
+                return 0;
             }
-            //for (int i = grid_Bottom.RowDefinitions.Count; i >= 0; i--)
-            //{
-            //    var row = grid_Bottom.Children.FirstOrDefault(x => Grid.GetRow((x as Grid)) == i);
-            //    if (row != null)
-            //    {
-            //        continue;
-            //    }
-            //    else
-            //    {
-            //        if (i>=max)
-            //        {
-            //            return i;
-            //        }
-                    
-            //    }
 
-            //}
-            return -1;
+            var area = DanmakuArea;
+            if (double.IsNaN(area) || double.IsInfinity(area))
+            {
+                area = 1;
+            }
+
+            return Math.Max(0, height * Math.Max(0.1, Math.Min(1, area)));
         }
+
         private double GetScrollAvailableHeight()
         {
             var height = grid_Scroll.ActualHeight;
@@ -529,48 +575,232 @@ namespace NSDanmaku.Controls
             }
 
             area = Math.Max(0.1, Math.Min(1, area));
-            var safetyHeight = Math.Max(2, Math.Min(8, Math.Ceiling(GetDefaultRowHeight() * 0.1)));
-            return Math.Max(0, height * area - safetyHeight);
+            return Math.Max(0, height * area);
         }
 
-        private double GetScrollRowHeight(int row)
+        private double GetSpaceStartTime(DanmakuModel model)
         {
-            if (row < 0 || row >= grid_Scroll.RowDefinitions.Count)
+            if (model != null
+                && !double.IsNaN(model.time)
+                && !double.IsInfinity(model.time)
+                && model.time > 0)
             {
-                return 0;
+                return model.time;
             }
 
-            var definition = grid_Scroll.RowDefinitions[row];
-            if (definition.Height.GridUnitType == GridUnitType.Pixel
-                && definition.Height.Value > 0
-                && !double.IsNaN(definition.Height.Value)
-                && !double.IsInfinity(definition.Height.Value))
-            {
-                return definition.Height.Value;
-            }
-
-            return GetDefaultRowHeight();
+            return GetDanmakuClock();
         }
 
-        private bool CanFitScrollRow(int row, double itemHeight)
+        private static void InsertSpaceItem(List<DanmakuSpaceItem> pool, DanmakuSpaceItem item)
         {
-            var availableHeight = GetScrollAvailableHeight();
+            var itemBottom = item.LogicalY + item.Height;
+            var index = pool.FindIndex(existing => existing.LogicalY + existing.Height > itemBottom);
+            if (index < 0)
+            {
+                pool.Add(item);
+            }
+            else
+            {
+                pool.Insert(index, item);
+            }
+        }
+
+        private void ReleaseSpace(Grid element)
+        {
+            DanmakuSpaceItem item;
+            if (element == null || !spaceItems.TryGetValue(element, out item))
+            {
+                return;
+            }
+
+            if (item.Pool != null)
+            {
+                item.Pool.Remove(item);
+            }
+
+            item.Pool = null;
+            spaceItems.Remove(element);
+        }
+
+        private List<List<DanmakuSpaceItem>> GetFixedPools(bool fromBottom)
+        {
+            return fromBottom ? bottomPools : topPools;
+        }
+
+        private bool IsFixedPoolAvailable(
+            List<DanmakuSpaceItem> pool,
+            double logicalY,
+            double itemHeight,
+            double availableHeight,
+            bool fromBottom)
+        {
+            var itemBottom = logicalY + itemHeight;
+            foreach (var occupied in pool)
+            {
+                if (!fromBottom)
+                {
+                    if (!(occupied.LogicalY > itemBottom
+                        || occupied.LogicalY + occupied.Height < logicalY))
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    var occupiedTop = availableHeight - occupied.LogicalY - occupied.Height;
+                    var occupiedLogicalY = availableHeight - occupiedTop - occupied.Height;
+                    if (!(occupiedLogicalY > itemBottom
+                        || occupiedLogicalY + occupied.Height < logicalY))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private bool TryGetFixedPoolPosition(
+            List<DanmakuSpaceItem> pool,
+            double itemHeight,
+            double availableHeight,
+            bool fromBottom,
+            out double logicalY)
+        {
+            logicalY = 0;
+            if (pool.Count == 0
+                || IsFixedPoolAvailable(pool, 0, itemHeight, availableHeight, fromBottom))
+            {
+                return true;
+            }
+
+            foreach (var occupied in pool)
+            {
+                logicalY = occupied.LogicalY + occupied.Height + PoolGap;
+                if (logicalY + itemHeight > availableHeight)
+                {
+                    break;
+                }
+
+                if (IsFixedPoolAvailable(pool, logicalY, itemHeight, availableHeight, fromBottom))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryReserveFixedSpace(
+            Grid element,
+            DanmakuModel model,
+            bool fromBottom,
+            out DanmakuSpaceItem space,
+            out double visualTop)
+        {
+            space = null;
+            visualTop = 0;
+            var availableHeight = GetFixedAvailableHeight(fromBottom ? grid_Bottom : grid_Top);
+            var itemHeight = MeasureDanmakuHeight(element);
             if (availableHeight <= 0 || itemHeight <= 0)
             {
                 return false;
             }
 
-            var usedHeight = 0.0;
-            for (int i = 0; i <= row; i++)
+            space = new DanmakuSpaceItem
             {
-                var rowHeight = GetScrollRowHeight(i);
-                if (i == row)
+                Element = element,
+                Width = GetDanmakuWidth(element),
+                Height = itemHeight,
+                StartTime = GetSpaceStartTime(model)
+            };
+
+            var pools = GetFixedPools(fromBottom);
+            if (itemHeight < availableHeight)
+            {
+                for (var poolIndex = 0; ; poolIndex++)
                 {
-                    rowHeight = Math.Max(rowHeight, itemHeight);
+                    while (pools.Count <= poolIndex)
+                    {
+                        pools.Add(new List<DanmakuSpaceItem>());
+                    }
+
+                    var pool = pools[poolIndex];
+                    double logicalY;
+                    if (!TryGetFixedPoolPosition(pool, itemHeight, availableHeight, fromBottom, out logicalY))
+                    {
+                        continue;
+                    }
+
+                    space.LogicalY = logicalY;
+                    space.Pool = pool;
+                    InsertSpaceItem(pool, space);
+                    visualTop = fromBottom
+                        ? availableHeight - logicalY - itemHeight
+                        : logicalY;
+                    spaceItems[element] = space;
+                    return true;
+                }
+            }
+
+            //The original player renders an over-height comment at offset zero
+            //without reserving a pool entry.
+            spaceItems[element] = space;
+            visualTop = fromBottom ? availableHeight - itemHeight : 0;
+            return true;
+        }
+
+        private double GetScrollInitialX(bool reverse, double viewportWidth, double itemWidth)
+        {
+            return reverse ? -itemWidth : viewportWidth;
+        }
+
+        private double GetCurrentScrollX(
+            DanmakuSpaceItem item,
+            bool reverse,
+            double viewportWidth,
+            double comparisonTime)
+        {
+            var transform = item.Element?.RenderTransform as TranslateTransform;
+            if (transform != null
+                && !double.IsNaN(transform.X)
+                && !double.IsInfinity(transform.X))
+            {
+                return transform.X;
+            }
+
+            var elapsed = Math.Max(0, comparisonTime - item.StartTime);
+            var distance = GetScrollSpeed(item.Width) * elapsed;
+            return GetScrollInitialX(reverse, viewportWidth, item.Width)
+                + (reverse ? distance : -distance);
+        }
+
+        private bool IsScrollPoolAvailable(
+            List<DanmakuSpaceItem> pool,
+            DanmakuSpaceItem item,
+            bool reverse,
+            double viewportWidth)
+        {
+            var itemBottom = item.LogicalY + item.Height;
+            //原版池分配时先将 x 设为 Width，mode6 在 start() 时才切换实际动画起点。
+            var itemX = viewportWidth;
+            var itemRight = itemX + item.Width;
+            foreach (var occupied in pool)
+            {
+                if (occupied.LogicalY > itemBottom
+                    || occupied.LogicalY + occupied.Height < item.LogicalY)
+                {
+                    continue;
                 }
 
-                usedHeight += rowHeight;
-                if (usedHeight > availableHeight + 0.1)
+                var occupiedX = GetCurrentScrollX(occupied, reverse, viewportWidth, item.StartTime);
+                var occupiedRight = occupiedX + occupied.Width;
+                if (!(occupiedRight < itemX || occupiedX > itemRight))
+                {
+                    return false;
+                }
+
+                if (GetScrollEnd(occupied, viewportWidth) > GetScrollMiddle(item, viewportWidth))
                 {
                     return false;
                 }
@@ -579,67 +809,114 @@ namespace NSDanmaku.Controls
             return true;
         }
 
-        private int GetScrollAvailableRow(Grid item, bool reverse = false)
+        private bool TryGetScrollPoolPosition(
+            List<DanmakuSpaceItem> pool,
+            DanmakuSpaceItem item,
+            bool reverse,
+            double viewportWidth,
+            double availableHeight,
+            out double logicalY)
         {
-            var width = grid_Scroll.ActualWidth;
-            //计算弹幕尺寸
-            item.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            var newWidth = item.DesiredSize.Width;
-            if (newWidth <= 0) return -1;
-
-            var newHeight = GetDefaultRowHeight();
-
-            var max = grid_Scroll.RowDefinitions.Count;
-
-            for (int i = 0; i < max; i++)
+            logicalY = 0;
+            if (pool.Count == 0)
             {
-                //每行的实际高度可能不同，累计高度不能超过滚动弹幕区域。
-                if (!CanFitScrollRow(i, newHeight))
+                return true;
+            }
+
+            if (IsScrollPoolAvailable(pool, item, reverse, viewportWidth))
+            {
+                return true;
+            }
+
+            foreach (var occupied in pool)
+            {
+                logicalY = occupied.LogicalY + occupied.Height + PoolGap;
+                if (logicalY + item.Height > availableHeight)
                 {
                     break;
                 }
 
-                //1、检查当前行是否存在弹幕
-                var lastItem=grid_Scroll.Children.LastOrDefault(x => Grid.GetRow((x as Grid)) == i);
-                if (lastItem == null)
+                item.LogicalY = logicalY;
+                if (IsScrollPoolAvailable(pool, item, reverse, viewportWidth))
                 {
-                    return i;
+                    return true;
                 }
-
-                var lastModel = (lastItem as Grid).Tag as DanmakuModel;
-                if (lastModel != null
-                    && (lastModel.location == DanmakuLocation.ReverseScroll) != reverse)
-                {
-                    continue;
-                }
-
-                var lastWidth = (lastItem as Grid).ActualWidth;
-                var lastX = (lastItem.RenderTransform as TranslateTransform).X;
-
-                //2、前弹幕必须已经完全从右侧移动完毕
-                if ((!reverse && lastX > width - lastWidth)
-                    || (reverse && lastX < 0))
-                {
-                    continue;
-                }
-                var lastPosition = reverse ? width - lastX - lastWidth : lastX;
-                //3、后弹幕速度小于等于前弹幕速度
-                var lastSpeed = (lastWidth + width) / DanmakuDuration;
-                var newSpeed = (newWidth + width) / DanmakuDuration;
-                if (newSpeed<= lastSpeed)
-                {
-                    return i;
-                }
-                //4、弹幕移动期间不会重叠
-                var runDistance = width - lastPosition;
-                var t1 = (runDistance - newWidth) / (newSpeed - lastSpeed);
-                var t2 = lastPosition / lastSpeed;
-                if (t1 > t2)
-                {
-                    return i;
-                }    
             }
-            return -1;
+
+            item.LogicalY = 0;
+            return false;
+        }
+
+        private bool TryReserveScrollSpace(
+            Grid element,
+            DanmakuModel model,
+            bool reverse,
+            out DanmakuSpaceItem space,
+            out double logicalY)
+        {
+            space = null;
+            logicalY = 0;
+            var viewportWidth = GetScrollViewportWidth();
+            var availableHeight = GetScrollAvailableHeight();
+            var itemWidth = GetDanmakuWidth(element);
+            var itemHeight = MeasureDanmakuHeight(element);
+            if (availableHeight <= 0 || itemWidth <= 0 || itemHeight <= 0)
+            {
+                return false;
+            }
+
+            space = new DanmakuSpaceItem
+            {
+                Element = element,
+                Width = itemWidth,
+                Height = itemHeight,
+                StartTime = GetSpaceStartTime(model)
+            };
+
+            if (itemHeight < availableHeight)
+            {
+                var pools = reverse ? reverseScrollPools : scrollPools;
+                for (var poolIndex = 0; ; poolIndex++)
+                {
+                    while (pools.Count <= poolIndex)
+                    {
+                        pools.Add(new List<DanmakuSpaceItem>());
+                    }
+
+                    var pool = pools[poolIndex];
+                    if (!TryGetScrollPoolPosition(
+                        pool,
+                        space,
+                        reverse,
+                        viewportWidth,
+                        availableHeight,
+                        out logicalY))
+                    {
+                        continue;
+                    }
+
+                    space.LogicalY = logicalY;
+                    space.Pool = pool;
+                    InsertSpaceItem(pool, space);
+                    spaceItems[element] = space;
+                    return true;
+                }
+            }
+
+            //The original player renders an over-height comment at offset zero
+            //without reserving a pool entry.
+            spaceItems[element] = space;
+            return true;
+        }
+
+        private double GetScrollEnd(DanmakuSpaceItem item, double viewportWidth)
+        {
+            return item.StartTime + GetScrollDuration(viewportWidth, item.Width);
+        }
+
+        private double GetScrollMiddle(DanmakuSpaceItem item, double viewportWidth)
+        {
+            return item.StartTime + viewportWidth / GetScrollSpeed(item.Width);
         }
 
 
@@ -682,31 +959,34 @@ namespace NSDanmaku.Controls
                 grid.BorderThickness = new Thickness(1);
             }
             EnsureRowsForItem(grid_Scroll, grid);
-            var r = GetScrollAvailableRow(grid);
-            if (r == -1)
+            DanmakuSpaceItem space;
+            double logicalY;
+            if (!TryReserveScrollSpace(grid, m, false, out space, out logicalY))
             {
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
                 return;
             }
-            Grid.SetRow(grid, r);
+            Grid.SetRow(grid, 0);
             grid.HorizontalAlignment = HorizontalAlignment.Left;
-            grid.VerticalAlignment = VerticalAlignment.Center;
+            grid.VerticalAlignment = VerticalAlignment.Top;
             grid_Scroll.Children.Add(grid);
-            SetRowHeight(grid_Scroll, r);
-            grid_Scroll.UpdateLayout();
+            SetRowHeight(grid_Scroll, 0);
 
             TranslateTransform moveTransform = new TranslateTransform();
-            moveTransform.X = gv.ActualWidth;
+            var viewportWidth = GetScrollViewportWidth();
+            var itemWidth = space.Width;
+            moveTransform.X = GetScrollInitialX(false, viewportWidth, itemWidth);
+            moveTransform.Y = logicalY;
             grid.RenderTransform = moveTransform;
 
             //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(DanmakuDuration));
+            Duration duration = new Duration(TimeSpan.FromSeconds(GetScrollDuration(viewportWidth, itemWidth)));
             DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
             myDoubleAnimationX.Duration = duration;
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
-            myDoubleAnimationX.To = -(grid.ActualWidth);//到达
+            myDoubleAnimationX.To = -itemWidth;//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
@@ -715,8 +995,10 @@ namespace NSDanmaku.Controls
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
+                ReleaseSpace(grid);
                 grid_Scroll.Children.Remove(grid);
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
+                SetRowHeight(grid_Scroll, 0);
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
@@ -789,29 +1071,32 @@ namespace NSDanmaku.Controls
                 grid.BorderThickness = new Thickness(1);
             }
             EnsureRowsForItem(grid_Scroll, grid);
-            var r = GetScrollAvailableRow(grid, reverse);
-            if (r == -1)
+            DanmakuSpaceItem space;
+            double logicalY;
+            if (!TryReserveScrollSpace(grid, m, reverse, out space, out logicalY))
             {
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
                 grid = null;
                 return;
             }
 
-            Grid.SetRow(grid, r);
+            Grid.SetRow(grid, 0);
             grid.HorizontalAlignment = HorizontalAlignment.Left;
-            grid.VerticalAlignment = VerticalAlignment.Center;
+            grid.VerticalAlignment = VerticalAlignment.Top;
             grid_Scroll.Children.Add(grid);
-            SetRowHeight(grid_Scroll, r);
-            grid_Scroll.UpdateLayout();
+            SetRowHeight(grid_Scroll, 0);
 
             TranslateTransform moveTransform = new TranslateTransform();
-            var fromX = reverse ? -grid.ActualWidth : gv.ActualWidth;
-            var toX = reverse ? gv.ActualWidth : -grid.ActualWidth;
+            var viewportWidth = GetScrollViewportWidth();
+            var itemWidth = space.Width;
+            var fromX = GetScrollInitialX(reverse, viewportWidth, itemWidth);
+            var toX = reverse ? viewportWidth : -itemWidth;
             moveTransform.X = fromX;
+            moveTransform.Y = logicalY;
             grid.RenderTransform = moveTransform;
 
             //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(DanmakuDuration));
+            Duration duration = new Duration(TimeSpan.FromSeconds(GetScrollDuration(viewportWidth, itemWidth)));
             DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
             myDoubleAnimationX.Duration = duration;
             //创建故事版
@@ -826,8 +1111,10 @@ namespace NSDanmaku.Controls
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
+                ReleaseSpace(grid);
                 grid_Scroll.Children.Remove(grid);
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
+                SetRowHeight(grid_Scroll, 0);
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
@@ -849,31 +1136,34 @@ namespace NSDanmaku.Controls
             Grid grid = null;
             grid = DanmakuItemControl.CreateImageControl(m);
             EnsureRowsForItem(grid_Scroll, grid);
-            var r = GetScrollAvailableRow(grid);
-            if (r == -1)
+            DanmakuSpaceItem space;
+            double logicalY;
+            if (!TryReserveScrollSpace(grid, null, false, out space, out logicalY))
             {
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
                 return;
             }
-            Grid.SetRow(grid, r);
+            Grid.SetRow(grid, 0);
             grid.HorizontalAlignment = HorizontalAlignment.Left;
-            grid.VerticalAlignment = VerticalAlignment.Center;
+            grid.VerticalAlignment = VerticalAlignment.Top;
             grid_Scroll.Children.Add(grid);
-            SetRowHeight(grid_Scroll, r);
-            grid_Scroll.UpdateLayout();
+            SetRowHeight(grid_Scroll, 0);
 
             TranslateTransform moveTransform = new TranslateTransform();
-            moveTransform.X = gv.ActualWidth;
+            var viewportWidth = GetScrollViewportWidth();
+            var itemWidth = space.Width;
+            moveTransform.X = GetScrollInitialX(false, viewportWidth, itemWidth);
+            moveTransform.Y = logicalY;
             grid.RenderTransform = moveTransform;
 
             //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(DanmakuDuration));
+            Duration duration = new Duration(TimeSpan.FromSeconds(GetScrollDuration(viewportWidth, itemWidth)));
             DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
             myDoubleAnimationX.Duration = duration;
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
-            myDoubleAnimationX.To = -(grid.ActualWidth);//到达
+            myDoubleAnimationX.To = -itemWidth;//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
@@ -882,9 +1172,10 @@ namespace NSDanmaku.Controls
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
-
+                ReleaseSpace(grid);
                 grid_Scroll.Children.Remove(grid);
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
+                SetRowHeight(grid_Scroll, 0);
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
                 SetRows(GetLayoutHeight());
@@ -910,8 +1201,9 @@ namespace NSDanmaku.Controls
             }
 
             EnsureRowsForItem(grid_Top, grid);
-            var r = GetTopAvailableRow();
-            if (r == -1)
+            DanmakuSpaceItem space;
+            double top;
+            if (!TryReserveFixedSpace(grid, m, false, out space, out top))
             {
                 RemoveMeasuredRowHeight(grid_Top, grid);
                 return;
@@ -919,15 +1211,16 @@ namespace NSDanmaku.Controls
 
             grid.HorizontalAlignment = HorizontalAlignment.Center;
             grid.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetRow(grid, r);
+            Grid.SetRow(grid, 0);
+            grid.RenderTransform = new TranslateTransform { Y = top };
             grid_Top.Children.Add(grid);
-            SetRowHeight(grid_Top, r);
+            SetRowHeight(grid_Top, 0);
 
 
             //创建空转换动画
             TranslateTransform moveTransform = new TranslateTransform();
             //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(5));
+            Duration duration = new Duration(TimeSpan.FromSeconds(FixedDanmakuDuration));
             DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
             myDoubleAnimationX.Duration = duration;
             //创建故事版
@@ -941,6 +1234,7 @@ namespace NSDanmaku.Controls
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
+                ReleaseSpace(grid);
                 grid_Top.Children.Remove(grid);
                 RemoveMeasuredRowHeight(grid_Top, grid);
                 grid.Children.Clear();
@@ -969,21 +1263,23 @@ namespace NSDanmaku.Controls
             grid.HorizontalAlignment = HorizontalAlignment.Center;
             grid.VerticalAlignment = VerticalAlignment.Top;
             EnsureRowsForItem(grid_Bottom, grid);
-            var row = GetBottomAvailableRow();
-            if (row == -1)
+            DanmakuSpaceItem space;
+            double top;
+            if (!TryReserveFixedSpace(grid, m, true, out space, out top))
             {
                 RemoveMeasuredRowHeight(grid_Bottom, grid);
                 return;
             }
-            Grid.SetRow(grid, row);
+            Grid.SetRow(grid, 0);
+            grid.RenderTransform = new TranslateTransform { Y = top };
             grid_Bottom.Children.Add(grid);
-            SetRowHeight(grid_Bottom, row);
+            SetRowHeight(grid_Bottom, 0);
 
 
             //创建空转换动画
             TranslateTransform moveTransform = new TranslateTransform();
             //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(5));
+            Duration duration = new Duration(TimeSpan.FromSeconds(FixedDanmakuDuration));
             DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
             myDoubleAnimationX.Duration = duration;
             //创建故事版
@@ -997,6 +1293,7 @@ namespace NSDanmaku.Controls
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
+                ReleaseSpace(grid);
                 grid_Bottom.Children.Remove(grid);
                 RemoveMeasuredRowHeight(grid_Bottom, grid);
                 grid.Children.Clear();
@@ -1211,6 +1508,7 @@ namespace NSDanmaku.Controls
                 return;
             }
 
+            ReleaseSpace(target);
             container.Children.Remove(target);
             RemoveMeasuredRowHeight(container, target);
             SetRows(GetLayoutHeight());
@@ -1220,11 +1518,24 @@ namespace NSDanmaku.Controls
         /// </summary>
         public void ClearAll()
         {
+            foreach (var item in topBottomStoryList.ToList())
+            {
+                item.Stop();
+            }
+            foreach (var item in rollStoryList.ToList())
+            {
+                item.Stop();
+            }
             topBottomStoryList.Clear();
             rollStoryList.Clear();
             grid_Bottom.Children.Clear();
             grid_Top.Children.Clear();
             grid_Scroll.Children.Clear();
+            topPools.Clear();
+            bottomPools.Clear();
+            scrollPools.Clear();
+            reverseScrollPools.Clear();
+            spaceItems.Clear();
             measuredRowHeights.Clear();
             defaultRowHeight = 0;
             SetRows(GetLayoutHeight());
