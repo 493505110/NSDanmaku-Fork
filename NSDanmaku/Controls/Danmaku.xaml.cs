@@ -212,10 +212,12 @@ namespace NSDanmaku.Controls
         #endregion
 
         //动画管理
-        List<Storyboard> topBottomStoryList = new List<Storyboard>();
+        List<FixedDanmakuLifetime> topBottomStoryList = new List<FixedDanmakuLifetime>();
         List<Storyboard> rollStoryList = new List<Storyboard>();
         List<Storyboard> positionStoryList = new List<Storyboard>();
         private const double FixedDanmakuDuration = 3.5;
+        private const int FixedDanmakuTickMilliseconds = 350;
+        private const int FixedDanmakuTickCount = 10;
         private const double OfficialDanmakuWidth = 543.0;
         private const double MinimumScrollDuration = 0.1;
         private const double PoolGap = 1.0;
@@ -229,11 +231,75 @@ namespace NSDanmaku.Controls
             public List<DanmakuSpaceItem> Pool { get; set; }
         }
 
+        private sealed class FixedDanmakuLifetime
+        {
+            private readonly DispatcherTimer timer;
+            private readonly Action completed;
+            private int tickCount;
+            private bool stopped;
+
+            public FixedDanmakuLifetime(Action completed)
+            {
+                this.completed = completed;
+                timer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(FixedDanmakuTickMilliseconds)
+                };
+                timer.Tick += OnTick;
+            }
+
+            public void Start()
+            {
+                if (!stopped)
+                {
+                    timer.Start();
+                }
+            }
+
+            public void Pause()
+            {
+                if (!stopped)
+                {
+                    timer.Stop();
+                }
+            }
+
+            public void Resume()
+            {
+                Start();
+            }
+
+            public void Stop()
+            {
+                if (stopped)
+                {
+                    return;
+                }
+
+                stopped = true;
+                timer.Stop();
+                timer.Tick -= OnTick;
+            }
+
+            private void OnTick(object sender, object args)
+            {
+                tickCount++;
+                if (tickCount < FixedDanmakuTickCount)
+                {
+                    return;
+                }
+
+                Stop();
+                completed?.Invoke();
+            }
+        }
+
         private readonly List<List<DanmakuSpaceItem>> topPools = new List<List<DanmakuSpaceItem>>();
         private readonly List<List<DanmakuSpaceItem>> bottomPools = new List<List<DanmakuSpaceItem>>();
         private readonly List<List<DanmakuSpaceItem>> scrollPools = new List<List<DanmakuSpaceItem>>();
         private readonly List<List<DanmakuSpaceItem>> reverseScrollPools = new List<List<DanmakuSpaceItem>>();
         private readonly Dictionary<Grid, DanmakuSpaceItem> spaceItems = new Dictionary<Grid, DanmakuSpaceItem>();
+        private readonly Dictionary<Grid, FixedDanmakuLifetime> fixedLifetimes = new Dictionary<Grid, FixedDanmakuLifetime>();
         Dictionary<Grid, double> measuredRowHeights = new Dictionary<Grid, double>();
         double defaultRowHeight;
         double layoutHeight;
@@ -620,6 +686,29 @@ namespace NSDanmaku.Controls
 
             item.Pool = null;
             spaceItems.Remove(element);
+        }
+
+        private void RemoveFixedDanmaku(Grid container, Grid element)
+        {
+            if (element == null)
+            {
+                return;
+            }
+
+            FixedDanmakuLifetime lifetime;
+            if (fixedLifetimes.TryGetValue(element, out lifetime))
+            {
+                lifetime.Stop();
+                fixedLifetimes.Remove(element);
+                topBottomStoryList.Remove(lifetime);
+            }
+
+            ReleaseSpace(element);
+            container.Children.Remove(element);
+            RemoveMeasuredRowHeight(container, element);
+            element.Children.Clear();
+            SetRowHeight(container, 0);
+            SetRows(GetLayoutHeight());
         }
 
         private List<List<DanmakuSpaceItem>> GetFixedPools(bool fromBottom)
@@ -1217,35 +1306,13 @@ namespace NSDanmaku.Controls
             SetRowHeight(grid_Top, 0);
 
 
-            //创建空转换动画
-            TranslateTransform moveTransform = new TranslateTransform();
-            //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(FixedDanmakuDuration));
-            DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
-            myDoubleAnimationX.Duration = duration;
-            //创建故事版
-            Storyboard moveStoryboard = new Storyboard();
-            moveStoryboard.Duration = duration;
-            moveStoryboard.Children.Add(myDoubleAnimationX);
-            Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
-            //故事版加入动画
-            Storyboard.SetTargetProperty(myDoubleAnimationX, "X");
-            topBottomStoryList.Add(moveStoryboard);
-
-            moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
+            var lifetime = new FixedDanmakuLifetime(() =>
             {
-                ReleaseSpace(grid);
-                grid_Top.Children.Remove(grid);
-                RemoveMeasuredRowHeight(grid_Top, grid);
-                grid.Children.Clear();
-                grid = null;
-                topBottomStoryList.Remove(moveStoryboard);
-                moveStoryboard.Stop();
-                moveStoryboard = null;
-                SetRows(GetLayoutHeight());
-
+                RemoveFixedDanmaku(grid_Top, grid);
             });
-            moveStoryboard.Begin();
+            fixedLifetimes[grid] = lifetime;
+            topBottomStoryList.Add(lifetime);
+            lifetime.Start();
         }
         /// <summary>
         ///  添加底部弹幕
@@ -1276,34 +1343,13 @@ namespace NSDanmaku.Controls
             SetRowHeight(grid_Bottom, 0);
 
 
-            //创建空转换动画
-            TranslateTransform moveTransform = new TranslateTransform();
-            //创建动画
-            Duration duration = new Duration(TimeSpan.FromSeconds(FixedDanmakuDuration));
-            DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
-            myDoubleAnimationX.Duration = duration;
-            //创建故事版
-            Storyboard moveStoryboard = new Storyboard();
-            moveStoryboard.Duration = duration;
-            moveStoryboard.Children.Add(myDoubleAnimationX);
-            Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
-            //故事版加入动画   
-            Storyboard.SetTargetProperty(myDoubleAnimationX, "X");
-            topBottomStoryList.Add(moveStoryboard);
-
-            moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
+            var lifetime = new FixedDanmakuLifetime(() =>
             {
-                ReleaseSpace(grid);
-                grid_Bottom.Children.Remove(grid);
-                RemoveMeasuredRowHeight(grid_Bottom, grid);
-                grid.Children.Clear();
-                grid = null;
-                topBottomStoryList.Remove(moveStoryboard);
-                moveStoryboard.Stop();
-                moveStoryboard = null;
-                SetRows(GetLayoutHeight());
+                RemoveFixedDanmaku(grid_Bottom, grid);
             });
-            moveStoryboard.Begin();
+            fixedLifetimes[grid] = lifetime;
+            topBottomStoryList.Add(lifetime);
+            lifetime.Start();
         }
         /// <summary>
         /// 添加定位弹幕
@@ -1508,10 +1554,7 @@ namespace NSDanmaku.Controls
                 return;
             }
 
-            ReleaseSpace(target);
-            container.Children.Remove(target);
-            RemoveMeasuredRowHeight(container, target);
-            SetRows(GetLayoutHeight());
+            RemoveFixedDanmaku(container, target);
         }
         /// <summary>
         /// 清空弹幕
@@ -1526,8 +1569,14 @@ namespace NSDanmaku.Controls
             {
                 item.Stop();
             }
+            foreach (var item in positionStoryList.ToList())
+            {
+                item.Stop();
+            }
             topBottomStoryList.Clear();
+            fixedLifetimes.Clear();
             rollStoryList.Clear();
+            positionStoryList.Clear();
             grid_Bottom.Children.Clear();
             grid_Top.Children.Clear();
             grid_Scroll.Children.Clear();
