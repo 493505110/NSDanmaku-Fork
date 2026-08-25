@@ -576,7 +576,7 @@ namespace NSDanmaku.Controls
             return true;
         }
 
-        private int GetScrollAvailableRow(Grid item)
+        private int GetScrollAvailableRow(Grid item, bool reverse = false)
         {
             var width = grid_Scroll.ActualWidth;
             //计算弹幕尺寸
@@ -606,15 +606,24 @@ namespace NSDanmaku.Controls
                 {
                     return i;
                 }
-              
-                var lastWidth = (lastItem as Grid).ActualWidth;
-                var lastX = (lastItem.RenderTransform as TranslateTransform).X;
-                
-                //2、前弹幕必须已经完全从右侧移动完毕
-                if (lastX > width- lastWidth)
+
+                var lastModel = (lastItem as Grid).Tag as DanmakuModel;
+                if (lastModel != null
+                    && (lastModel.location == DanmakuLocation.ReverseScroll) != reverse)
                 {
                     continue;
                 }
+
+                var lastWidth = (lastItem as Grid).ActualWidth;
+                var lastX = (lastItem.RenderTransform as TranslateTransform).X;
+
+                //2、前弹幕必须已经完全从右侧移动完毕
+                if ((!reverse && lastX > width - lastWidth)
+                    || (reverse && lastX < 0))
+                {
+                    continue;
+                }
+                var lastPosition = reverse ? width - lastX - lastWidth : lastX;
                 //3、后弹幕速度小于等于前弹幕速度
                 var lastSpeed = (lastWidth + width) / DanmakuDuration;
                 var newSpeed = (newWidth + width) / DanmakuDuration;
@@ -623,9 +632,9 @@ namespace NSDanmaku.Controls
                     return i;
                 }
                 //4、弹幕移动期间不会重叠
-                var runDistance =width- lastX;
+                var runDistance = width - lastPosition;
                 var t1 = (runDistance - newWidth) / (newSpeed - lastSpeed);
-                var t2 = lastX / lastSpeed;
+                var t2 = lastPosition / lastSpeed;
                 if (t1 > t2)
                 {
                     return i;
@@ -732,6 +741,9 @@ namespace NSDanmaku.Controls
                 case DanmakuLocation.Scroll:
                     await AddScrollDanmu(m, own);
                     break;
+                case DanmakuLocation.ReverseScroll:
+                    await AddReverseScrollDanmu(m, own);
+                    break;
                 case DanmakuLocation.Top:
                     await AddTopDanmu(m, own);
                     break;
@@ -753,7 +765,22 @@ namespace NSDanmaku.Controls
         /// </summary>
         /// <param name="m">参数</param>
         /// <param name="own">是否自己发送的</param>
-        public async Task AddScrollDanmu(DanmakuModel m, bool own)
+        public Task AddScrollDanmu(DanmakuModel m, bool own)
+        {
+            return AddHorizontalScrollDanmu(m, own, false);
+        }
+
+        /// <summary>
+        /// 添加逆向滚动弹幕
+        /// </summary>
+        /// <param name="m">参数</param>
+        /// <param name="own">是否自己发送的</param>
+        public Task AddReverseScrollDanmu(DanmakuModel m, bool own)
+        {
+            return AddHorizontalScrollDanmu(m, own, true);
+        }
+
+        private async Task AddHorizontalScrollDanmu(DanmakuModel m, bool own, bool reverse)
         {
             Grid grid = await CreateNewDanmuControl(m);
 
@@ -763,7 +790,7 @@ namespace NSDanmaku.Controls
                 grid.BorderThickness = new Thickness(1);
             }
             EnsureRowsForItem(grid_Scroll, grid);
-            var r = GetScrollAvailableRow(grid);
+            var r = GetScrollAvailableRow(grid, reverse);
             if (r == -1)
             {
                 RemoveMeasuredRowHeight(grid_Scroll, grid);
@@ -779,7 +806,9 @@ namespace NSDanmaku.Controls
             grid_Scroll.UpdateLayout();
 
             TranslateTransform moveTransform = new TranslateTransform();
-            moveTransform.X = gv.ActualWidth;
+            var fromX = reverse ? -grid.ActualWidth : gv.ActualWidth;
+            var toX = reverse ? gv.ActualWidth : -grid.ActualWidth;
+            moveTransform.X = fromX;
             grid.RenderTransform = moveTransform;
 
             //创建动画
@@ -789,7 +818,7 @@ namespace NSDanmaku.Controls
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
-            myDoubleAnimationX.To = -(grid.ActualWidth);//到达
+            myDoubleAnimationX.To = toX;//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
@@ -1156,6 +1185,8 @@ namespace NSDanmaku.Controls
                 case DanmakuLocation.Bottom:
                     RemoveFromRowContainer(grid_Bottom, danmaku);
                     break;
+                case DanmakuLocation.Scroll:
+                case DanmakuLocation.ReverseScroll:
                 case DanmakuLocation.Other:
                     RemoveFromRowContainer(grid_Scroll, danmaku);
                     break;
@@ -1226,11 +1257,19 @@ namespace NSDanmaku.Controls
                     danmakus.Add(item.Tag as DanmakuModel);
                 }
             }
-            if (danmakuLocation == null || danmakuLocation == DanmakuLocation.Scroll)
+            if (danmakuLocation == null
+                || danmakuLocation == DanmakuLocation.Scroll
+                || danmakuLocation == DanmakuLocation.ReverseScroll)
             {
                 foreach (Grid item in grid_Scroll.Children)
                 {
-                    danmakus.Add(item.Tag as DanmakuModel);
+                    var model = item.Tag as DanmakuModel;
+                    if (danmakuLocation == null
+                        || model == null
+                        || model.location == danmakuLocation)
+                    {
+                        danmakus.Add(model);
+                    }
                 }
             }
             return danmakus;
@@ -1245,6 +1284,7 @@ namespace NSDanmaku.Controls
             switch (location)
             {
                 case DanmakuLocation.Scroll:
+                case DanmakuLocation.ReverseScroll:
                     grid_Scroll.Visibility = Visibility.Collapsed;
                     break;
                 case DanmakuLocation.Top:
@@ -1267,6 +1307,7 @@ namespace NSDanmaku.Controls
             switch (location)
             {
                 case DanmakuLocation.Scroll:
+                case DanmakuLocation.ReverseScroll:
                     grid_Scroll.Visibility = Visibility.Visible;
                     break;
                 case DanmakuLocation.Top:

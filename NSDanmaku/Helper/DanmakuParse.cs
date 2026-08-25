@@ -74,6 +74,9 @@ namespace NSDanmaku.Helper
                             case "5":
                                 location = DanmakuLocation.Top;
                                 break;
+                            case "6":
+                                location = DanmakuLocation.ReverseScroll;
+                                break;
                             default:
                                 location = DanmakuLocation.Scroll;
                                 break;

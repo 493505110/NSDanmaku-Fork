@@ -29,7 +29,11 @@ namespace NSDanmaku.Model
         /// <summary>
         /// 其它暂未支持的类型
         /// </summary>
-        Other
+        Other,
+        /// <summary>
+        /// 逆向滚动弹幕Model6
+        /// </summary>
+        ReverseScroll
     }
     public enum DanmakuSite
     {
