@@ -84,46 +84,33 @@ namespace NSDanmaku.Controls
         }
         private void SetFontDanmakuSizeZoom(double value)
         {
-           
-            SetRows(this.ActualHeight);
-            foreach (var item in grid_Scroll.Children)
+            defaultRowHeight = 0;
+            UpdateFontSize(grid_Scroll, value);
+            UpdateFontSize(grid_Top, value);
+            UpdateFontSize(grid_Bottom, value);
+            RefreshRowHeights();
+            SetRows(GetLayoutHeight());
+        }
+
+        private void UpdateFontSize(Grid container, double value)
+        {
+            foreach (var item in container.Children)
             {
                 var grid = item as Grid;
-                var m = grid.Tag as DanmakuModel;
-                foreach (var tb in grid.Children)
+                var model = grid?.Tag as DanmakuModel;
+                if (model == null)
                 {
-                    if (tb is TextBlock)
-                    {
-                        (tb as TextBlock).FontSize = Convert.ToInt32(m.size) * DanmakuSizeZoom;
-                    }
+                    continue;
                 }
 
-            }
-            foreach (var item in grid_Top.Children)
-            {
-                var grid = item as Grid;
-                var m = grid.Tag as DanmakuModel;
-                foreach (var tb in grid.Children)
+                foreach (var child in grid.Children)
                 {
-                    if (tb is TextBlock)
+                    var textBlock = child as TextBlock;
+                    if (textBlock != null)
                     {
-                        (tb as TextBlock).FontSize = Convert.ToInt32(m.size) * DanmakuSizeZoom;
+                        textBlock.FontSize = model.size * value;
                     }
                 }
-
-            }
-            foreach (var item in grid_Bottom.Children)
-            {
-                var grid = item as Grid;
-                var m = grid.Tag as DanmakuModel;
-                foreach (var tb in grid.Children)
-                {
-                    if (tb is TextBlock)
-                    {
-                        (tb as TextBlock).FontSize = Convert.ToInt32(m.size) * DanmakuSizeZoom;
-                    }
-                }
-
             }
         }
 
@@ -228,43 +215,238 @@ namespace NSDanmaku.Controls
         List<Storyboard> topBottomStoryList = new List<Storyboard>();
         List<Storyboard> rollStoryList = new List<Storyboard>();
         List<Storyboard> positionStoryList = new List<Storyboard>();
+        Dictionary<Grid, double> measuredRowHeights = new Dictionary<Grid, double>();
+        double defaultRowHeight;
+        double layoutHeight;
 
         protected override Size MeasureOverride(Size availableSize)
         {
+            layoutHeight = availableSize.Height;
             SetRows(availableSize.Height);
             return base.MeasureOverride(availableSize);
         }
 
         private void SetRows(double height)
         {
-            
-            var txt = new TextBlock() { 
-                Text="测试test",
-                FontSize=25*DanmakuSizeZoom,
-            };
-            txt.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            var rowHieght = txt.DesiredSize.Height;
-          
-           
-          
-            //将全部行去除
-            grid_Top.RowDefinitions.Clear();
-            grid_Bottom.RowDefinitions.Clear();
-            grid_Scroll.RowDefinitions.Clear();
+            SetRows(grid_Top, height);
+            SetRows(grid_Bottom, height);
+            SetRows(grid_Scroll, height);
+        }
 
-            int num = Convert.ToInt32(height / rowHieght);
-           // int pnum = Convert.ToInt32(height / rowHieght);
-
-            //for (int i = 0; i < num; i++)
-            //{
-            //    grid_Bottom.RowDefinitions.Add(new RowDefinition());
-            //    grid_Top.RowDefinitions.Add(new RowDefinition());
-            //}
-            for (int i = 0; i < num; i++)
+        private void SetRows(Grid container, double height)
+        {
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
             {
-                grid_Bottom.RowDefinitions.Add(new RowDefinition());
-                grid_Top.RowDefinitions.Add(new RowDefinition());
-                grid_Scroll.RowDefinitions.Add(new RowDefinition());
+                return;
+            }
+
+            var rowCount = Math.Max(1, (int)Math.Floor(height / GetDefaultRowHeight()));
+            rowCount = Math.Max(rowCount, GetRequiredRowCount(container));
+
+            while (container.RowDefinitions.Count < rowCount)
+            {
+                container.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = new GridLength(GetDefaultRowHeight(), GridUnitType.Pixel)
+                });
+            }
+
+            while (container.RowDefinitions.Count > rowCount
+                && !HasChildrenInRow(container, container.RowDefinitions.Count - 1))
+            {
+                container.RowDefinitions.RemoveAt(container.RowDefinitions.Count - 1);
+            }
+        }
+
+        private int GetRequiredRowCount(Grid container)
+        {
+            var rowCount = 0;
+            foreach (var child in container.Children)
+            {
+                var grid = child as Grid;
+                if (grid != null)
+                {
+                    rowCount = Math.Max(rowCount, Grid.GetRow(grid) + 1);
+                }
+            }
+
+            return rowCount;
+        }
+
+        private bool HasChildrenInRow(Grid container, int row)
+        {
+            foreach (var item in container.Children)
+            {
+                var grid = item as Grid;
+                if (grid != null && Grid.GetRow(grid) == row)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void RefreshRowHeights()
+        {
+            RefreshRowHeights(grid_Top);
+            RefreshRowHeights(grid_Bottom);
+            RefreshRowHeights(grid_Scroll);
+        }
+
+        private void RefreshRowHeights(Grid container)
+        {
+            SetRows(container, GetLayoutHeight());
+
+            foreach (var item in container.Children)
+            {
+                var grid = item as Grid;
+                if (grid == null)
+                {
+                    continue;
+                }
+
+                measuredRowHeights[grid] = MeasureDanmakuHeight(grid);
+            }
+
+            for (int row = 0; row < container.RowDefinitions.Count; row++)
+            {
+                SetRowHeight(container, row);
+            }
+        }
+
+        private void SetRowHeight(Grid container, int row)
+        {
+            if (row < 0 || row >= container.RowDefinitions.Count)
+            {
+                return;
+            }
+
+            var rowHeight = 0.0;
+            foreach (var item in container.Children)
+            {
+                var grid = item as Grid;
+                double measuredHeight;
+                if (grid != null
+                    && Grid.GetRow(grid) == row
+                    && measuredRowHeights.TryGetValue(grid, out measuredHeight))
+                {
+                    rowHeight = Math.Max(rowHeight, measuredHeight);
+                }
+            }
+
+            if (rowHeight <= 0)
+            {
+                rowHeight = GetDefaultRowHeight();
+            }
+
+            rowHeight = NormalizeRowHeight(rowHeight);
+            var definition = container.RowDefinitions[row];
+            if (definition.Height.GridUnitType != GridUnitType.Pixel
+                || Math.Abs(definition.Height.Value - rowHeight) >= 0.1)
+            {
+                definition.Height = new GridLength(rowHeight, GridUnitType.Pixel);
+            }
+        }
+
+        private double GetDefaultRowHeight()
+        {
+            if (defaultRowHeight > 0)
+            {
+                return defaultRowHeight;
+            }
+
+            var textBlock = new TextBlock
+            {
+                Text = "测试test",
+                FontSize = 25 * DanmakuSizeZoom
+            };
+            textBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            defaultRowHeight = NormalizeRowHeight(textBlock.DesiredSize.Height);
+            return defaultRowHeight;
+        }
+
+        private static double NormalizeRowHeight(double height)
+        {
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
+            {
+                return 1;
+            }
+
+            return Math.Max(1, Math.Ceiling(height));
+        }
+
+        private double GetLayoutHeight()
+        {
+            if (!double.IsNaN(ActualHeight) && !double.IsInfinity(ActualHeight) && ActualHeight > 0)
+            {
+                return ActualHeight;
+            }
+
+            return layoutHeight;
+        }
+
+        private void EnsureRowsForItem(Grid container, Grid item)
+        {
+            measuredRowHeights[item] = MeasureDanmakuHeight(item);
+            SetRows(container, GetLayoutHeight());
+        }
+
+        private double MeasureDanmakuHeight(Grid grid)
+        {
+            var rowHeight = 0.0;
+            foreach (var child in grid.Children)
+            {
+                var textBlock = child as TextBlock;
+                if (textBlock != null)
+                {
+                    textBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    var marginHeight = textBlock.Margin.Top + textBlock.Margin.Bottom;
+                    var minimumHeight = textBlock.FontSize + marginHeight + 2;
+                    rowHeight = Math.Max(rowHeight, Math.Max(textBlock.DesiredSize.Height, minimumHeight));
+                    continue;
+                }
+
+                var element = child as FrameworkElement;
+                if (element != null)
+                {
+                    element.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    rowHeight = Math.Max(rowHeight, element.DesiredSize.Height);
+                }
+            }
+
+            if (rowHeight <= 0)
+            {
+                grid.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                rowHeight = grid.DesiredSize.Height;
+            }
+            else
+            {
+                rowHeight += grid.Margin.Top
+                    + grid.Margin.Bottom
+                    + grid.BorderThickness.Top
+                    + grid.BorderThickness.Bottom;
+            }
+
+            return NormalizeRowHeight(rowHeight);
+        }
+
+        private void RemoveMeasuredRowHeight(Grid container, Grid item)
+        {
+            measuredRowHeights.Remove(item);
+        }
+
+        private void ResetRowHeights(Grid container)
+        {
+            var rowHeight = GetDefaultRowHeight();
+            for (int row = 0; row < container.RowDefinitions.Count; row++)
+            {
+                var definition = container.RowDefinitions[row];
+                if (definition.Height.GridUnitType != GridUnitType.Pixel
+                    || Math.Abs(definition.Height.Value - rowHeight) >= 0.1)
+                {
+                    definition.Height = new GridLength(rowHeight, GridUnitType.Pixel);
+                }
             }
         }
         private int GetTopAvailableRow()
@@ -324,6 +506,76 @@ namespace NSDanmaku.Controls
             //}
             return -1;
         }
+        private double GetScrollAvailableHeight()
+        {
+            var height = grid_Scroll.ActualHeight;
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
+            {
+                height = GetLayoutHeight();
+            }
+
+            if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
+            {
+                return 0;
+            }
+
+            var area = DanmakuArea;
+            if (double.IsNaN(area) || double.IsInfinity(area))
+            {
+                area = 1;
+            }
+
+            area = Math.Max(0.1, Math.Min(1, area));
+            var safetyHeight = Math.Max(2, Math.Min(8, Math.Ceiling(GetDefaultRowHeight() * 0.1)));
+            return Math.Max(0, height * area - safetyHeight);
+        }
+
+        private double GetScrollRowHeight(int row)
+        {
+            if (row < 0 || row >= grid_Scroll.RowDefinitions.Count)
+            {
+                return 0;
+            }
+
+            var definition = grid_Scroll.RowDefinitions[row];
+            if (definition.Height.GridUnitType == GridUnitType.Pixel
+                && definition.Height.Value > 0
+                && !double.IsNaN(definition.Height.Value)
+                && !double.IsInfinity(definition.Height.Value))
+            {
+                return definition.Height.Value;
+            }
+
+            return GetDefaultRowHeight();
+        }
+
+        private bool CanFitScrollRow(int row, double itemHeight)
+        {
+            var availableHeight = GetScrollAvailableHeight();
+            if (availableHeight <= 0 || itemHeight <= 0)
+            {
+                return false;
+            }
+
+            var usedHeight = 0.0;
+            for (int i = 0; i <= row; i++)
+            {
+                var rowHeight = GetScrollRowHeight(i);
+                if (i == row)
+                {
+                    rowHeight = Math.Max(rowHeight, itemHeight);
+                }
+
+                usedHeight += rowHeight;
+                if (usedHeight > availableHeight + 0.1)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private int GetScrollAvailableRow(Grid item)
         {
             var width = grid_Scroll.ActualWidth;
@@ -331,11 +583,23 @@ namespace NSDanmaku.Controls
             item.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var newWidth = item.DesiredSize.Width;
             if (newWidth <= 0) return -1;
-           
-            var max = grid_Scroll.RowDefinitions.Count*DanmakuArea;
-           
+
+            double newHeight;
+            if (!measuredRowHeights.TryGetValue(item, out newHeight))
+            {
+                newHeight = MeasureDanmakuHeight(item);
+            }
+
+            var max = grid_Scroll.RowDefinitions.Count;
+
             for (int i = 0; i < max; i++)
             {
+                //每行的实际高度可能不同，累计高度不能超过滚动弹幕区域。
+                if (!CanFitScrollRow(i, newHeight))
+                {
+                    break;
+                }
+
                 //1、检查当前行是否存在弹幕
                 var lastItem=grid_Scroll.Children.LastOrDefault(x => Grid.GetRow((x as Grid)) == i);
                 if (lastItem == null)
@@ -409,15 +673,18 @@ namespace NSDanmaku.Controls
                 grid.BorderBrush = new SolidColorBrush(color.Value);
                 grid.BorderThickness = new Thickness(1);
             }
+            EnsureRowsForItem(grid_Scroll, grid);
             var r = GetScrollAvailableRow(grid);
             if (r == -1)
             {
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 return;
             }
             Grid.SetRow(grid, r);
             grid.HorizontalAlignment = HorizontalAlignment.Left;
             grid.VerticalAlignment = VerticalAlignment.Center;
             grid_Scroll.Children.Add(grid);
+            SetRowHeight(grid_Scroll, r);
             grid_Scroll.UpdateLayout();
 
             TranslateTransform moveTransform = new TranslateTransform();
@@ -441,11 +708,13 @@ namespace NSDanmaku.Controls
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
                 grid_Scroll.Children.Remove(grid);
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
+                SetRows(GetLayoutHeight());
 
             });
             moveStoryboard.Begin();
@@ -493,9 +762,11 @@ namespace NSDanmaku.Controls
                 grid.BorderBrush = new SolidColorBrush(m.color);
                 grid.BorderThickness = new Thickness(1);
             }
+            EnsureRowsForItem(grid_Scroll, grid);
             var r = GetScrollAvailableRow(grid);
             if (r == -1)
             {
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 grid = null;
                 return;
             }
@@ -504,6 +775,7 @@ namespace NSDanmaku.Controls
             grid.HorizontalAlignment = HorizontalAlignment.Left;
             grid.VerticalAlignment = VerticalAlignment.Center;
             grid_Scroll.Children.Add(grid);
+            SetRowHeight(grid_Scroll, r);
             grid_Scroll.UpdateLayout();
 
             TranslateTransform moveTransform = new TranslateTransform();
@@ -527,11 +799,13 @@ namespace NSDanmaku.Controls
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
                 grid_Scroll.Children.Remove(grid);
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
+                SetRows(GetLayoutHeight());
             });
             moveStoryboard.Begin();
 
@@ -546,15 +820,18 @@ namespace NSDanmaku.Controls
         {
             Grid grid = null;
             grid = DanmakuItemControl.CreateImageControl(m);
+            EnsureRowsForItem(grid_Scroll, grid);
             var r = GetScrollAvailableRow(grid);
             if (r == -1)
             {
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 return;
             }
             Grid.SetRow(grid, r);
             grid.HorizontalAlignment = HorizontalAlignment.Left;
             grid.VerticalAlignment = VerticalAlignment.Center;
             grid_Scroll.Children.Add(grid);
+            SetRowHeight(grid_Scroll, r);
             grid_Scroll.UpdateLayout();
 
             TranslateTransform moveTransform = new TranslateTransform();
@@ -579,8 +856,10 @@ namespace NSDanmaku.Controls
             {
 
                 grid_Scroll.Children.Remove(grid);
+                RemoveMeasuredRowHeight(grid_Scroll, grid);
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
+                SetRows(GetLayoutHeight());
 
             });
             moveStoryboard.Begin();
@@ -602,9 +881,11 @@ namespace NSDanmaku.Controls
                 grid.BorderThickness = new Thickness(1);
             }
 
+            EnsureRowsForItem(grid_Top, grid);
             var r = GetTopAvailableRow();
             if (r == -1)
             {
+                RemoveMeasuredRowHeight(grid_Top, grid);
                 return;
             }
 
@@ -612,6 +893,7 @@ namespace NSDanmaku.Controls
             grid.VerticalAlignment = VerticalAlignment.Top;
             Grid.SetRow(grid, r);
             grid_Top.Children.Add(grid);
+            SetRowHeight(grid_Top, r);
 
 
             //创建空转换动画
@@ -632,11 +914,13 @@ namespace NSDanmaku.Controls
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
                 grid_Top.Children.Remove(grid);
+                RemoveMeasuredRowHeight(grid_Top, grid);
                 grid.Children.Clear();
                 grid = null;
                 topBottomStoryList.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
+                SetRows(GetLayoutHeight());
 
             });
             moveStoryboard.Begin();
@@ -656,13 +940,16 @@ namespace NSDanmaku.Controls
             }
             grid.HorizontalAlignment = HorizontalAlignment.Center;
             grid.VerticalAlignment = VerticalAlignment.Top;
+            EnsureRowsForItem(grid_Bottom, grid);
             var row = GetBottomAvailableRow();
             if (row == -1)
             {
+                RemoveMeasuredRowHeight(grid_Bottom, grid);
                 return;
             }
             Grid.SetRow(grid, row);
             grid_Bottom.Children.Add(grid);
+            SetRowHeight(grid_Bottom, row);
 
 
             //创建空转换动画
@@ -683,11 +970,13 @@ namespace NSDanmaku.Controls
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
                 grid_Bottom.Children.Remove(grid);
+                RemoveMeasuredRowHeight(grid_Bottom, grid);
                 grid.Children.Clear();
                 grid = null;
                 topBottomStoryList.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
+                SetRows(GetLayoutHeight());
             });
             moveStoryboard.Begin();
         }
@@ -862,36 +1151,39 @@ namespace NSDanmaku.Controls
             switch (danmaku.location)
             {
                 case DanmakuLocation.Top:
-
-                    foreach (Grid item in grid_Top.Children)
-                    {
-                        if (item.Tag as DanmakuModel == danmaku)
-                        {
-                            grid_Top.Children.Remove(item);
-                        }
-                    }
+                    RemoveFromRowContainer(grid_Top, danmaku);
                     break;
                 case DanmakuLocation.Bottom:
-                    foreach (Grid item in grid_Bottom.Children)
-                    {
-                        if (item.Tag as DanmakuModel == danmaku)
-                        {
-                            grid_Bottom.Children.Remove(item);
-                        }
-                    }
+                    RemoveFromRowContainer(grid_Bottom, danmaku);
                     break;
                 case DanmakuLocation.Other:
-                    foreach (Grid item in grid_Scroll.Children)
-                    {
-                        if (item.Tag as DanmakuModel == danmaku)
-                        {
-                            grid_Scroll.Children.Remove(item);
-                        }
-                    }
+                    RemoveFromRowContainer(grid_Scroll, danmaku);
                     break;
                 default:
                     break;
             }
+        }
+
+        private void RemoveFromRowContainer(Grid container, DanmakuModel danmaku)
+        {
+            Grid target = null;
+            foreach (Grid item in container.Children)
+            {
+                if (item.Tag as DanmakuModel == danmaku)
+                {
+                    target = item;
+                    break;
+                }
+            }
+
+            if (target == null)
+            {
+                return;
+            }
+
+            container.Children.Remove(target);
+            RemoveMeasuredRowHeight(container, target);
+            SetRows(GetLayoutHeight());
         }
         /// <summary>
         /// 清空弹幕
@@ -903,6 +1195,12 @@ namespace NSDanmaku.Controls
             grid_Bottom.Children.Clear();
             grid_Top.Children.Clear();
             grid_Scroll.Children.Clear();
+            measuredRowHeights.Clear();
+            defaultRowHeight = 0;
+            SetRows(GetLayoutHeight());
+            ResetRowHeights(grid_Top);
+            ResetRowHeights(grid_Bottom);
+            ResetRowHeights(grid_Scroll);
 
         }
 
