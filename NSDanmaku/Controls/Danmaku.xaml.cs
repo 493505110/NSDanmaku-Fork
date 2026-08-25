@@ -306,7 +306,7 @@ namespace NSDanmaku.Controls
                     continue;
                 }
 
-                measuredRowHeights[grid] = MeasureDanmakuHeight(grid);
+                measuredRowHeights[grid] = container == grid_Scroll ? GetDefaultRowHeight() : MeasureDanmakuHeight(grid);
             }
 
             for (int row = 0; row < container.RowDefinitions.Count; row++)
@@ -322,16 +322,19 @@ namespace NSDanmaku.Controls
                 return;
             }
 
-            var rowHeight = 0.0;
-            foreach (var item in container.Children)
+            var rowHeight = container == grid_Scroll ? GetDefaultRowHeight() : 0.0;
+            if (container != grid_Scroll)
             {
-                var grid = item as Grid;
-                double measuredHeight;
-                if (grid != null
-                    && Grid.GetRow(grid) == row
-                    && measuredRowHeights.TryGetValue(grid, out measuredHeight))
+                foreach (var item in container.Children)
                 {
-                    rowHeight = Math.Max(rowHeight, measuredHeight);
+                    var grid = item as Grid;
+                    double measuredHeight;
+                    if (grid != null
+                        && Grid.GetRow(grid) == row
+                        && measuredRowHeights.TryGetValue(grid, out measuredHeight))
+                    {
+                        rowHeight = Math.Max(rowHeight, measuredHeight);
+                    }
                 }
             }
 
@@ -388,7 +391,7 @@ namespace NSDanmaku.Controls
 
         private void EnsureRowsForItem(Grid container, Grid item)
         {
-            measuredRowHeights[item] = MeasureDanmakuHeight(item);
+            measuredRowHeights[item] = container == grid_Scroll ? GetDefaultRowHeight() : MeasureDanmakuHeight(item);
             SetRows(container, GetLayoutHeight());
         }
 
@@ -584,11 +587,7 @@ namespace NSDanmaku.Controls
             var newWidth = item.DesiredSize.Width;
             if (newWidth <= 0) return -1;
 
-            double newHeight;
-            if (!measuredRowHeights.TryGetValue(item, out newHeight))
-            {
-                newHeight = MeasureDanmakuHeight(item);
-            }
+            var newHeight = GetDefaultRowHeight();
 
             var max = grid_Scroll.RowDefinitions.Count;
 
