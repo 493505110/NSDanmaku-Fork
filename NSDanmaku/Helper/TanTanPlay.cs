@@ -80,9 +80,14 @@ namespace NSDanmaku.Helper
                                 location = DanmakuLocation.Scroll;
                                 break;
                         }
+                        var danmakuText = item.m;
+                        if (location != DanmakuLocation.Position && danmakuText != null)
+                        {
+                            danmakuText = danmakuText.Replace("/n", "\r\n");
+                        }
                         list.Add(new DanmakuModel()
                         {
-                            text = item.m,
+                            text = danmakuText,
                             color = datas[2].ToColor(),
                             location = location,
                             fromSite = DanmakuSite.Tantan,

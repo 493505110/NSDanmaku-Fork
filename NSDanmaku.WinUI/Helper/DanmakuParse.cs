@@ -81,6 +81,11 @@ namespace NSDanmaku.WinUI.Helper
                                 location = DanmakuLocation.Scroll;
                                 break;
                         }
+                        var danmakuText = item.InnerText;
+                        if (location != DanmakuLocation.Position)
+                        {
+                            danmakuText = danmakuText.Replace("/n", "\r\n");
+                        }
                         ls.Add(new DanmakuModel
                         {
                             time = double.Parse(txtSplit[0]),
@@ -92,7 +97,7 @@ namespace NSDanmaku.WinUI.Helper
                             pool = txtSplit[5],
                             sendID = txtSplit[6],
                             rowID = txtSplit[7],
-                            text = item.InnerText,
+                            text = danmakuText,
                             source = item.OuterXml,
                             fromSite = DanmakuSite.Bilibili,
                             //xml弹幕不返回此字段
