@@ -225,6 +225,9 @@ namespace NSDanmaku.WinUI.Controls
         //动画管理
         List<Storyboard> topBottomStoryList = new List<Storyboard>();
         List<Storyboard> rollStoryList = new List<Storyboard>();
+        // 滚动弹幕的故事板与动画目标的对应关系。UWP/WinUI 都没有 Storyboard.GetTarget，
+        // 暂停/恢复时只能靠这里找到一条弹幕此刻该停在什么位置。
+        readonly Dictionary<Storyboard, TranslateTransform> scrollTransforms = new Dictionary<Storyboard, TranslateTransform>();
         List<Storyboard> positionStoryList = new List<Storyboard>();
 
         protected override Size MeasureOverride(Size availableSize)
@@ -439,12 +442,14 @@ namespace NSDanmaku.WinUI.Controls
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
+            myDoubleAnimationX.From = moveTransform.X;
             myDoubleAnimationX.To = -(grid.ActualWidth);//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
             Storyboard.SetTargetProperty(myDoubleAnimationX, "X");
             rollStoryList.Add(moveStoryboard);
+            scrollTransforms[moveStoryboard] = moveTransform;
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
@@ -452,6 +457,7 @@ namespace NSDanmaku.WinUI.Controls
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
+                scrollTransforms.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
 
@@ -540,12 +546,14 @@ namespace NSDanmaku.WinUI.Controls
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
+            myDoubleAnimationX.From = moveTransform.X;
             myDoubleAnimationX.To = toX;//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
             Storyboard.SetTargetProperty(myDoubleAnimationX, "X");
             rollStoryList.Add(moveStoryboard);
+            scrollTransforms[moveStoryboard] = moveTransform;
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
@@ -553,6 +561,7 @@ namespace NSDanmaku.WinUI.Controls
                 grid.Children.Clear();
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
+                scrollTransforms.Remove(moveStoryboard);
                 moveStoryboard.Stop();
                 moveStoryboard = null;
             });
@@ -591,12 +600,14 @@ namespace NSDanmaku.WinUI.Controls
             //创建故事版
             Storyboard moveStoryboard = new Storyboard();
             moveStoryboard.Duration = duration;
+            myDoubleAnimationX.From = moveTransform.X;
             myDoubleAnimationX.To = -(grid.ActualWidth);//到达
             moveStoryboard.Children.Add(myDoubleAnimationX);
             Storyboard.SetTarget(myDoubleAnimationX, moveTransform);
             //故事版加入动画
             Storyboard.SetTargetProperty(myDoubleAnimationX, "X");
             rollStoryList.Add(moveStoryboard);
+            scrollTransforms[moveStoryboard] = moveTransform;
 
             moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
             {
@@ -604,6 +615,7 @@ namespace NSDanmaku.WinUI.Controls
                 scrollContainer.Children.Remove(grid);
                 grid = null;
                 rollStoryList.Remove(moveStoryboard);
+                scrollTransforms.Remove(moveStoryboard);
 
             });
             moveStoryboard.Begin();
@@ -843,6 +855,120 @@ namespace NSDanmaku.WinUI.Controls
         /// <summary>
         /// 暂停弹幕
         /// </summary>
+        /// <summary>
+        /// 暂停一条滚动弹幕。不能只调用 Storyboard.Pause：窗口最小化后再还原时，XAML 会把此前
+        /// 挂起的动画时钟一并恢复，只被 Pause 的弹幕会重新滚动起来。这里直接停掉时钟，并把弹幕
+        /// 冻结在它此刻应在的位置，系统就没有可以重新跑起来的时钟了。
+        /// </summary>
+        private void PauseScrollDanmaku(Storyboard storyboard)
+        {
+            var animation = GetScrollAnimation(storyboard);
+            var transform = GetScrollTransform(storyboard);
+            if (animation == null || transform == null)
+            {
+                return;
+            }
+
+            // 已经停止说明这条弹幕此前已被暂停，再次暂停会把它错误地拉回起点。
+            if (storyboard.GetCurrentState() == ClockState.Stopped)
+            {
+                return;
+            }
+
+            var duration = animation.Duration;
+            if (!duration.HasTimeSpan || duration.TimeSpan.TotalSeconds <= 0)
+            {
+                return;
+            }
+
+            var totalSeconds = duration.TimeSpan.TotalSeconds;
+            var elapsedSeconds = storyboard.GetCurrentTime().TotalSeconds;
+            if (elapsedSeconds < 0)
+            {
+                elapsedSeconds = 0;
+            }
+            if (elapsedSeconds > totalSeconds)
+            {
+                elapsedSeconds = totalSeconds;
+            }
+
+            var from = animation.From ?? 0;
+            var to = animation.To ?? from;
+
+            storyboard.Stop();
+            transform.X = from + (to - from) * (elapsedSeconds / totalSeconds);
+        }
+
+        /// <summary>
+        /// 恢复一条滚动弹幕：按剩余路程和原本的速度重建一段动画。
+        /// </summary>
+        private void ResumeScrollDanmaku(Storyboard storyboard)
+        {
+            var animation = GetScrollAnimation(storyboard);
+            var transform = GetScrollTransform(storyboard);
+            if (animation == null || transform == null)
+            {
+                return;
+            }
+
+            if (storyboard.GetCurrentState() == ClockState.Active)
+            {
+                return;
+            }
+
+            var duration = animation.Duration;
+            if (!duration.HasTimeSpan || duration.TimeSpan.TotalSeconds <= 0)
+            {
+                return;
+            }
+
+            var totalSeconds = duration.TimeSpan.TotalSeconds;
+            var from = animation.From ?? 0;
+            var to = animation.To ?? from;
+            var totalDistance = to - from;
+            if (Math.Abs(totalDistance) < double.Epsilon)
+            {
+                return;
+            }
+
+            var currentX = transform.X;
+            var remainingSeconds = totalSeconds * (to - currentX) / totalDistance;
+            if (remainingSeconds < 0)
+            {
+                // 理论上不会出现；真出现时按 0 处理，让动画立刻走完并交给 Completed 回收这条弹幕。
+                remainingSeconds = 0;
+            }
+
+            var remainingAnimation = new DoubleAnimation
+            {
+                From = currentX,
+                To = to,
+                Duration = new Duration(TimeSpan.FromSeconds(remainingSeconds))
+            };
+            Storyboard.SetTarget(remainingAnimation, transform);
+            Storyboard.SetTargetProperty(remainingAnimation, "X");
+
+            storyboard.Children.Clear();
+            storyboard.Children.Add(remainingAnimation);
+            storyboard.Duration = new Duration(TimeSpan.FromSeconds(remainingSeconds));
+            storyboard.Begin();
+        }
+
+        private static DoubleAnimation GetScrollAnimation(Storyboard storyboard)
+        {
+            return storyboard != null && storyboard.Children.Count > 0
+                ? storyboard.Children[0] as DoubleAnimation
+                : null;
+        }
+
+        private TranslateTransform GetScrollTransform(Storyboard storyboard)
+        {
+            TranslateTransform transform;
+            return storyboard != null && scrollTransforms.TryGetValue(storyboard, out transform)
+                ? transform
+                : null;
+        }
+
         public void PauseDanmaku()
         {
             foreach (var item in topBottomStoryList)
@@ -851,7 +977,7 @@ namespace NSDanmaku.WinUI.Controls
             }
             foreach (var item in rollStoryList)
             {
-                item.Pause();
+                PauseScrollDanmaku(item);
             }
             foreach (var item in positionStoryList)
             {
@@ -869,7 +995,7 @@ namespace NSDanmaku.WinUI.Controls
             }
             foreach (var item in rollStoryList)
             {
-                item.Resume();
+                ResumeScrollDanmaku(item);
             }
             foreach (var item in positionStoryList)
             {
@@ -925,6 +1051,7 @@ namespace NSDanmaku.WinUI.Controls
         {
             topBottomStoryList.Clear();
             rollStoryList.Clear();
+            scrollTransforms.Clear();
             bottomContainer.Children.Clear();
             topContainer.Children.Clear();
             scrollContainer.Children.Clear();
