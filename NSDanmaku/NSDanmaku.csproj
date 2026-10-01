@@ -118,6 +118,8 @@
       <DependentUpon>TantanDialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="Helper\DanmakuParse.cs" />
+    <Compile Include="Helper\ScrollDanmakuPlacement.cs" />
+    <Compile Include="Helper\DanmakuRowHeightIndex.cs" />
     <Compile Include="Helper\TanTanPlay.cs" />
     <Compile Include="Helper\Utils.cs" />
     <Compile Include="Helper\WebHelper.cs" />
