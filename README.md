@@ -1,4 +1,7 @@
-# NSDanmaku
+# NSDanmaku-Fork
+fork自[xiaoyaocz/NSDanmaku](https://github.com/xiaoyaocz/NSDanmaku)
+还原了B站原版Flash播放器的弹幕行为，添加了大量AI~~屎山~~代码
+
 一个简单的UWP/WinUI3弹幕控件
 
 ## 截图
