@@ -911,7 +911,8 @@ namespace NSDanmaku.WinUI.Controls
                 return;
             }
 
-            if (storyboard.GetCurrentState() == ClockState.Active)
+            // Active 和 Filling 都不能修改子动画；仅重建由暂停逻辑 Stop 的动画。
+            if (storyboard.GetCurrentState() != ClockState.Stopped)
             {
                 return;
             }
