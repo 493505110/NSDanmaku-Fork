@@ -1,4 +1,4 @@
-﻿using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
 using NSDanmaku.Model;
@@ -135,52 +135,52 @@ namespace NSDanmaku.Controls
             float size = (float)model.size * (float)sizeZoom;
 
             CanvasDevice device = CanvasDevice.GetSharedDevice();
-           
-            CanvasTextFormat fmt = new CanvasTextFormat() { FontSize = size };
-            var tb = new TextBlock { Text = model.text, FontSize = size, };
 
-            if (bold)
+            using (CanvasTextFormat fmt = new CanvasTextFormat() { FontSize = size })
             {
-                fmt.FontWeight = FontWeights.Bold;
-                tb.FontWeight = FontWeights.Bold;
-            }
-            if (fontFamily != "")
-            {
-                fmt.FontFamily = fontFamily;
-                tb.FontFamily = new FontFamily(fontFamily);
-            }
-            tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            
-            var myBitmap = new CanvasRenderTarget(device, (float)tb.DesiredSize.Width, (float)tb.DesiredSize.Height, Danmaku.LogicalDpi);
-           
-            CanvasTextLayout canvasTextLayout = new CanvasTextLayout(device, model.text, fmt, (float)tb.DesiredSize.Width, (float)tb.DesiredSize.Height);
-            
-            CanvasGeometry combinedGeometry = CanvasGeometry.CreateText(canvasTextLayout);
+                var tb = new TextBlock { Text = model.text, FontSize = size, };
 
-            using (var ds = myBitmap.CreateDrawingSession())
-            {
-                ds.Clear(Colors.Transparent);
-                ds.DrawGeometry(combinedGeometry, GetBorderColor(model.color), 2f,new CanvasStrokeStyle() {
-                    DashStyle = CanvasDashStyle.Solid
-                });
-                ds.FillGeometry(combinedGeometry, model.color);
+                if (bold)
+                {
+                    fmt.FontWeight = FontWeights.Bold;
+                    tb.FontWeight = FontWeights.Bold;
+                }
+                if (fontFamily != "")
+                {
+                    fmt.FontFamily = fontFamily;
+                    tb.FontFamily = new FontFamily(fontFamily);
+                }
+                tb.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+
+                using (var myBitmap = new CanvasRenderTarget(device, Math.Max(1, (float)tb.DesiredSize.Width), Math.Max(1, (float)tb.DesiredSize.Height), Danmaku.LogicalDpi))
+                using (CanvasTextLayout canvasTextLayout = new CanvasTextLayout(device, model.text, fmt, (float)tb.DesiredSize.Width, (float)tb.DesiredSize.Height))
+                using (CanvasGeometry combinedGeometry = CanvasGeometry.CreateText(canvasTextLayout))
+                {
+
+                    using (var ds = myBitmap.CreateDrawingSession())
+                    {
+                        ds.Clear(Colors.Transparent);
+                        using (var stroke = new CanvasStrokeStyle { DashStyle = CanvasDashStyle.Solid })
+                            ds.DrawGeometry(combinedGeometry, GetBorderColor(model.color), 2f, stroke);
+                        ds.FillGeometry(combinedGeometry, model.color);
+                    }
+                    Image image = new Image();
+                    BitmapImage im = new BitmapImage();
+                    using (InMemoryRandomAccessStream oStream = new InMemoryRandomAccessStream())
+                    {
+                        await myBitmap.SaveAsync(oStream, CanvasBitmapFileFormat.Png, 1.0f);
+                        await im.SetSourceAsync(oStream);
+                    }
+                    image.Source = im;
+                    image.Stretch = Stretch.Uniform;
+                    Grid grid = new Grid();
+
+                    grid.Tag = model;
+                    grid.Children.Add(image);
+
+                    return grid;
+                }
             }
-            Image image = new Image();
-            BitmapImage im = new BitmapImage();
-            using (InMemoryRandomAccessStream oStream = new InMemoryRandomAccessStream())
-            {
-                await myBitmap.SaveAsync(oStream, CanvasBitmapFileFormat.Png, 1.0f);
-                await im.SetSourceAsync(oStream);
-            }
-            image.Source = im;
-            image.Stretch = Stretch.Uniform;
-            Grid grid = new Grid();
-
-            grid.Tag = model;
-            grid.Children.Add(image);
-
-            return grid;
-
         }
 
         public static Color GetBorderColor(Color textColor)

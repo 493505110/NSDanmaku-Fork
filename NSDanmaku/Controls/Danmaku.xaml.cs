@@ -51,6 +51,7 @@ namespace NSDanmaku.Controls
         public Danmaku()
         {
             this.InitializeComponent();
+            InitializePositionDanmaku();
             DanmakuArea = 1.0;
             DanmakuBold = true;
             DanmakuFontFamily = "黑体";
@@ -85,6 +86,10 @@ namespace NSDanmaku.Controls
         }
         private void SetFontDanmakuSizeZoom(double value)
         {
+            ClearPositionDanmaku();
+            positionSuspended = false;
+            UpdatePositionDanmaku();
+            UpdatePositionRendering();
             defaultRowHeight = 0;
             UpdateFontSize(grid_Scroll, value);
             UpdateFontSize(grid_Top, value);
@@ -216,7 +221,6 @@ namespace NSDanmaku.Controls
         //动画管理
         List<FixedDanmakuLifetime> topBottomStoryList = new List<FixedDanmakuLifetime>();
         List<Storyboard> rollStoryList = new List<Storyboard>();
-        List<Storyboard> positionStoryList = new List<Storyboard>();
         // 滚动弹幕的故事板与动画目标的对应关系。UWP 没有 Storyboard.GetTarget，
         // 暂停/恢复时只能靠这里找到一条弹幕此刻该停在什么位置。
         readonly Dictionary<Storyboard, TranslateTransform> scrollTransforms = new Dictionary<Storyboard, TranslateTransform>();
@@ -1389,126 +1393,9 @@ namespace NSDanmaku.Controls
         /// 添加定位弹幕
         /// </summary>
         /// <param name="m"></param>
-        public async Task AddPositionDanmu(DanmakuModel m)
+        public Task AddPositionDanmu(DanmakuModel m)
         {
-            var data = Newtonsoft.Json.JsonConvert.DeserializeObject<object[]>(m.text);
-            m.text = data[4].ToString().Replace("/n", "\r\n");
-             Grid grid = await CreateNewDanmuControl(m); ;
-            var DanmakuFontFamilyFamily = data[data.Length - 2].ToString();
-            
-            grid.Tag = m;
-            grid.HorizontalAlignment = HorizontalAlignment.Left;
-            grid.VerticalAlignment = VerticalAlignment.Center;
-
-            double toX = 0;
-            double toY = 0;
-
-            double X = 0, Y = 0;
-            double dur = 0;
-
-            if (data.Length > 7)
-            {
-                X =data[0].ToDouble();
-                Y = data[1].ToDouble();
-
-                toX =data[7].ToDouble();
-                toY = data[8].ToDouble();
-
-                dur = data[10].ToDouble();
-
-            }
-            else
-            {
-                toX = data[0].ToDouble();
-                toY =data[1].ToDouble();
-            }
-            if (toX < 1 && toY < 1)
-            {
-                toX = this.ActualWidth * toX;
-                toY = this.ActualHeight * toY;
-            }
-            if (X < 1 && Y < 1)
-            {
-                X = this.ActualWidth * X;
-                Y = this.ActualHeight * Y;
-            }
-
-            if (data.Length >= 7)
-            {
-                var rotateZ = data[5].ToDouble();
-                var rotateY = data[6].ToDouble();
-                PlaneProjection projection = new PlaneProjection();
-                projection.RotationZ = -rotateZ;
-                projection.RotationY = rotateY;
-                grid.Projection = projection;
-            }
-
-            //Canvas.SetLeft(grid, toX);
-            //Canvas.SetTop(grid, toY);
-
-            canvas.Children.Add(grid);
-
-
-            double dmDuration = data[3].ToDouble();
-            var opacitys = data[2].ToString().Split('-');
-            double opacityFrom = opacitys[0].ToDouble();
-            double opacityTo = opacitys[1].ToDouble();
-
-            //创建故事版
-            Storyboard moveStoryboard = new Storyboard();
-
-
-            //if (X != toX || Y != toY)
-            //{
-            Duration duration = new Duration(TimeSpan.FromMilliseconds(dur));
-            {
-                DoubleAnimation myDoubleAnimationY = new DoubleAnimation();
-                myDoubleAnimationY.Duration = duration;
-                myDoubleAnimationY.From = Y;
-                myDoubleAnimationY.To = toY;
-
-
-                Storyboard.SetTarget(myDoubleAnimationY, grid);
-                Storyboard.SetTargetProperty(myDoubleAnimationY, "(Canvas.Top)");
-                moveStoryboard.Children.Add(myDoubleAnimationY);
-            }
-            {
-                DoubleAnimation myDoubleAnimationX = new DoubleAnimation();
-                myDoubleAnimationX.Duration = duration;
-                myDoubleAnimationX.From = X;
-                myDoubleAnimationX.To = toX;
-                Storyboard.SetTarget(myDoubleAnimationX, grid);
-                Storyboard.SetTargetProperty(myDoubleAnimationX, "(Canvas.Left)");
-                moveStoryboard.Children.Add(myDoubleAnimationX);
-            }
-            //}
-            //else
-            //{
-            //    Canvas.SetTop(grid,toY);
-            //    Canvas.SetLeft(grid,toX);
-            //}
-
-            //透明度动画 
-            DoubleAnimation opacityAnimation = new DoubleAnimation()
-            {
-                Duration = new Duration(TimeSpan.FromSeconds(dmDuration)),
-                From = opacityFrom,
-                To = opacityTo
-            };
-            Storyboard.SetTarget(opacityAnimation, grid);
-            Storyboard.SetTargetProperty(opacityAnimation, "Opacity");
-            moveStoryboard.Children.Add(opacityAnimation);
-
-
-
-            positionStoryList.Add(moveStoryboard);
-
-            moveStoryboard.Completed += new EventHandler<object>((senders, obj) =>
-            {
-                canvas.Children.Remove(grid);
-                positionStoryList.Remove(moveStoryboard);
-            });
-            moveStoryboard.Begin();
+            return AddPositionDanmuCore(m);
         }
         #region 弹幕控制方法
         /// <summary>
@@ -1524,10 +1411,7 @@ namespace NSDanmaku.Controls
             {
                 PauseScrollDanmaku(item);
             }
-            foreach (var item in positionStoryList)
-            {
-                item.Pause();
-            }
+            PausePositionDanmaku();
         }
         /// <summary>
         /// 继续弹幕
@@ -1542,10 +1426,7 @@ namespace NSDanmaku.Controls
             {
                 ResumeScrollDanmaku(item);
             }
-            foreach (var item in positionStoryList)
-            {
-                item.Resume();
-            }
+            ResumePositionDanmaku();
         }
 
         /// <summary>
@@ -1717,14 +1598,10 @@ namespace NSDanmaku.Controls
             {
                 item.Stop();
             }
-            foreach (var item in positionStoryList.ToList())
-            {
-                item.Stop();
-            }
+            ClearPositionDanmaku();
             topBottomStoryList.Clear();
             fixedLifetimes.Clear();
             rollStoryList.Clear();
-            positionStoryList.Clear();
             scrollTransforms.Clear();
             grid_Bottom.Children.Clear();
             grid_Top.Children.Clear();

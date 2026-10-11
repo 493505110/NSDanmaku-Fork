@@ -114,6 +114,8 @@
     </Compile>
     <Compile Include="Controls\DanmakuExtensions.cs" />
     <Compile Include="Controls\DanmakuItemControl.cs" />
+    <Compile Include="Controls\Danmaku.Position.cs" />
+    <Compile Include="Helper\PositionDanmaku.cs" />
     <Compile Include="Controls\TantanDialog.xaml.cs">
       <DependentUpon>TantanDialog.xaml</DependentUpon>
     </Compile>
